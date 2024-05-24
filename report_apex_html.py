@@ -40,7 +40,6 @@ HTML_HEAD = """
             font-weight: bold;
             word-wrap: break-word;
             line-height: 2;
-            text-align: left;
         }
         
         .imagetitle{
@@ -408,7 +407,7 @@ def gen_criteria_sm(criteria,sm):
 
 def _table2html(table,has_head=True):    
     # add title
-    html = '''\t<table style="margin-left: 0; margin-right: auto;" border="2px">\n'''
+    html = '''\t<table border="2px">\n''' # style="margin-left: 0; margin-right: auto;"
 
     # add table head
     start_row = 0
@@ -709,32 +708,32 @@ def gen_html(report_setting, output):
     '''
     
     keys = report_setting.get("keys",{})
-    content = report_setting.get("content",[])
     
     html = HTML_HEAD + "\n<body>\n"
     html += keys2html(keys) + "\n"
 
     # write content
     has_image = False
-    for item in content:
-        itype = item.get("type","text")
-        icontent = item.get("content","")
-        if itype in ["head1","head2","head3"]:
-            html += f'''\t<div class="{itype}">{icontent}</div>\n'''
-        elif itype == "text":
-            html += text2html(item)
-        elif itype == "image":
-            html += image2html(item)
-            has_image = True
-        elif itype == "table":
-            html += table2html(item)
-        elif itype == "metrics":
-            html += metrics2html(item)
-        elif itype == "supermetrics":
-            html += supermetrics2html(item)
-        else:
-            continue
-        html += "\n"
+    for content in report_setting.values():
+        for item in content:
+            itype = item.get("type","text")
+            icontent = item.get("content","")
+            if itype in ["head1","head2","head3"]:
+                html += f'''\t<div class="{itype}">{icontent}</div>\n'''
+            elif itype == "text":
+                html += text2html(item)
+            elif itype == "image":
+                html += image2html(item)
+                has_image = True
+            elif itype == "table":
+                html += table2html(item)
+            elif itype == "metrics":
+                html += metrics2html(item)
+            elif itype == "supermetrics":
+                html += supermetrics2html(item)
+            else:
+                continue
+    html += "\n"
     
     # add script for image zoom
     html += gen_script(has_image)
@@ -789,6 +788,7 @@ def tag_dataset(orig_dataset: dict) -> dict:
         simplified_dataset = {simplified_path_dict[k]: v for k, v in orig_dataset.items()}
     except KeyError:
         simplified_dataset = orig_dataset
+    
     # replace data id with tag specified in the dataset if exists
     tagged_dataset = {}
     for k, v in simplified_dataset.items():
@@ -796,6 +796,7 @@ def tag_dataset(orig_dataset: dict) -> dict:
             tagged_dataset[tag] = v
         else:
             tagged_dataset[k] = v
+    
     return tagged_dataset
 
 def cal_relative_error(predicted, actual):
@@ -803,11 +804,11 @@ def cal_relative_error(predicted, actual):
     predicted (float): predicted value
     actual (float): actual value
     return:
-    float: relative error (%)
+    float: relative error
     """
     return abs(predicted - actual) / abs(actual)
 
-def cal_STD(predicted: list, actual: list, point_group_sym: str):
+def cal_cij_CV(predicted: list, actual: list, point_group_sym: str):
     """
     categories based on point group symbols in DFT
     """
@@ -821,88 +822,101 @@ def cal_STD(predicted: list, actual: list, point_group_sym: str):
         ela_pred_tensor = np.array([predicted[0][0], predicted[0][1], predicted[0][2], predicted[2][2], predicted[3][3], predicted[5][5]])
         ela_actu_tensor = np.array([actual[0][0], actual[0][1], actual[0][2], actual[2][2], actual[3][3], actual[5][5]])
         
-    STD_value = np.sqrt(np.sum(((ela_pred_tensor - ela_actu_tensor) / ela_actu_tensor) ** 2) / np.size(ela_actu_tensor))
+    CV_value = np.sqrt(np.sum((ela_pred_tensor - ela_actu_tensor) ** 2) / np.size(ela_actu_tensor)) / np.mean(ela_actu_tensor)
     
-    return STD_value
+    return CV_value
 
-def prep_abc_content(orig_dict: dict, conf: str) -> dict:
+def prep_elastic_content(orig_dict: dict, conf: str) -> dict:
     content_dict = {}
     idx = 3
     for k, v in orig_dict.items():
-        new_dict = {k: None for k in METRICS_LIST}
+        new_dict = {k: None for k in METRICS_LIST0}
 
         try:
-            conf_info = v[conf]['relaxation']['structure_info']
-            elastic_data = v[conf]['elastic_00']['result']
+            conf_info = v[conf]["relaxation"]["structure_info"]
+            elastic_data = v[conf]["elastic_00"]["result"]
         except KeyError:
-            print(f"{conf} information is not in {k}")
+            print(f"Elastic information of {conf} is not in {k}")
+            content_dict[k] = new_dict
+
+            if k == 'Expt':
+                new_dict["idx"] = 0
+            elif k == 'DFT(abacus)':
+                new_dict["idx"] = 1
+            elif k == 'single-dai':
+                new_dict["idx"] = 2
+            elif k == 'mace':
+                new_dict["idx"] = 3
+            else:
+                idx += 1
+                new_dict["idx"] = idx
             continue
         else:
-            tensor = elastic_data['elastic_tensor']
+            tensor = elastic_data["elastic_tensor"]
             new_dict["c11"] = tensor[0][0]
             new_dict["c12"] = tensor[0][1]
             new_dict["c13"] = tensor[0][2]
             new_dict["c33"] = tensor[2][2]
             new_dict["c44"] = tensor[3][3]
             new_dict["c66"] = tensor[5][5]
-            new_dict["BV"] = elastic_data['BV']
-            new_dict["GV"] = elastic_data['GV']
+            new_dict["BV"] = elastic_data["BV"]
+            new_dict["GV"] = elastic_data["GV"]
 
             # relative error of BV against experimental data
             if k != 'Expt':
                 try:
-                    new_dict["RE_BV_Expt"] = cal_relative_error(elastic_data['BV'], orig_dict['Expt'][conf]['elastic_00']['result']['BV'])
+                    new_dict["RE_BV_Expt"] = cal_relative_error(elastic_data["BV"], orig_dict["Expt"][conf]["elastic_00"]["result"]["BV"])
                 except KeyError:
                     new_dict["RE_BV_Expt"] = None
-                    print(f"Experimental information is not in {conf} for calculating RE_BV_Expt of {k}")
+                    print(f"Experimental information BV is not in {conf} for calculating RE_BV_Expt of {k}")
                 except TypeError:
                     new_dict["RE_BV_Expt"] = None
-                    print(f"Experimental infomation BV is not complete in {conf} for calculating RE_BV_Expt of {k}")
+                    print(f"Experimental infomation BV may be None in {conf} for calculating RE_BV_Expt of {k}")
             # relative error of BV against DFT data
             if k != 'Expt' and k != 'DFT(abacus)':
                 try:
-                    new_dict["RE_BV_DFT"] = cal_relative_error(elastic_data['BV'], orig_dict['DFT(abacus)'][conf]['elastic_00']['result']['BV'])
+                    new_dict["RE_BV_DFT"] = cal_relative_error(elastic_data["BV"], orig_dict["DFT(abacus)"][conf]["elastic_00"]["result"]["BV"])
                 except KeyError:
                     new_dict["RE_BV_DFT"] = None
-                    print(f"DFT information is not in {conf} for calculating RE_BV_DFT of {k}")
+                    print(f"DFT information BV is not in {conf} for calculating RE_BV_DFT of {k}")
             # relative error of GV against experimental data
             if k != 'Expt':
                 try:
-                    new_dict["RE_GV_Expt"] = cal_relative_error(elastic_data['GV'], orig_dict['Expt'][conf]['elastic_00']['result']['GV'])
+                    new_dict["RE_GV_Expt"] = cal_relative_error(elastic_data["GV"], orig_dict["Expt"][conf]["elastic_00"]["result"]["GV"])
                 except KeyError:
                     new_dict["RE_GV_Expt"] = None
-                    print(f"Experimental information is not in {conf} for calculating RE_GV_Expt of {k}")
+                    print(f"Experimental information GV is not in {conf} for calculating RE_GV_Expt of {k}")
                 except TypeError:
                     new_dict["RE_GV_Expt"] = None
-                    print(f"Experimental infomation GV is not complete in {conf} for calculating RE_GV_Expt of {k}")
+                    print(f"Experimental infomation GV may be None in {conf} for calculating RE_GV_Expt of {k}")
             # relative error of GV against DFT data
             if k != 'Expt' and k != 'DFT(abacus)':
                 try:
-                    new_dict["RE_GV_DFT"] = cal_relative_error(elastic_data['GV'], orig_dict['DFT(abacus)'][conf]['elastic_00']['result']['GV'])
+                    new_dict["RE_GV_DFT"] = cal_relative_error(elastic_data["GV"], orig_dict["DFT(abacus)"][conf]["elastic_00"]["result"]["GV"])
                 except KeyError:
                     new_dict["RE_GV_DFT"] = None
-                    print(f"DFT information is not in {conf} for calculating RE_GV_DFT of {k}")
+                    print(f"DFT information GV is not in {conf} for calculating RE_GV_DFT of {k}")
 
-            # STD based on Expt data
+            # CV based on Expt data
             if k != 'Expt':
                 try:
-                    new_dict["STD_Expt"] = cal_STD(tensor, orig_dict['Expt'][conf]['elastic_00']['result']['elastic_tensor'], \
-                                                   orig_dict['DFT(abacus)'][conf]['relaxation']['structure_info']['point_group_symbol'])
+                    new_dict["CV_Expt"] = cal_cij_CV(tensor, orig_dict["Expt"][conf]["elastic_00"]["result"]["elastic_tensor"], \
+                                                   orig_dict["DFT(abacus)"][conf]["relaxation"]["structure_info"]["point_group_symbol"])
                 except KeyError:
-                    new_dict["STD_Expt"] = None
-                    print(f"Experimental information is not in {conf} for calculating STD_Expt of {k}")
+                    new_dict["CV_Expt"] = None
+                    print(f"Experimental information elastic_tensor is not in {conf} for calculating CV_Expt of {k}")
                 except TypeError:
-                    new_dict["STD_Expt"] = None
-                    print(f"Experimental information cij is not complete in {conf} for calculating STD_Expt of {k}")
+                    new_dict["CV_Expt"] = None
+                    print(f"Experimental information cij may be None in {conf} for calculating CV_Expt of {k}")
             
-            # STD based on DFT data
+            # CV based on DFT data
             if k != 'Expt' and k != 'DFT(abacus)':
                 try:
-                    new_dict["STD_DFT"] = cal_STD(tensor, orig_dict['DFT(abacus)'][conf]['elastic_00']['result']['elastic_tensor'], \
-                                                  orig_dict['DFT(abacus)'][conf]['relaxation']['structure_info']['point_group_symbol'])
+                    new_dict["CV_DFT"] = cal_cij_CV(tensor, orig_dict["DFT(abacus)"][conf]["elastic_00"]["result"]["elastic_tensor"], \
+                                                  orig_dict["DFT(abacus)"][conf]["relaxation"]["structure_info"]["point_group_symbol"])
                 except KeyError:
-                    new_dict["STD_DFT"] = None
-                    print(f"DFT information is not in {conf} for calculating STD_DFT of {k}")
+                    new_dict["CV_DFT"] = None
+                    print(f"DFT information elastic_tensor is not in {conf} for calculating CV_DFT of {k}")
 
             content_dict[k] = new_dict
         
@@ -920,126 +934,267 @@ def prep_abc_content(orig_dict: dict, conf: str) -> dict:
 
     return content_dict
 
-def prep_abc_dict(orig_dict: dict) -> dict:
+def prep_elastic_dict(orig_dict: dict) -> list:
     all_confs = set()
     all_props = set()
-    abc_all_dict ={
-        "report": {
-            "content": []
-        }
-    }
+
     for w in orig_dict.values():
         all_confs.update(w.keys())
         for c in w.values():
             all_props.update(c.keys())
-
-    abc_confs_dict_list = []
     all_confs_list = list(all_confs)
     all_confs_list.sort()
+
+    confs_elastic_dict_list = []
     for conf in all_confs_list:
-        # print(orig_dict['DFT(abacus)'][conf]['relaxation']['structure_info']['point_group_symbol'])
         conf_dict = {
             "type": "metrics",
-            "content": prep_abc_content(orig_dict, conf),
+            "content": prep_elastic_content(orig_dict, conf),
             "title": conf,
             "criteria": {
                 "RE_BV_Expt": "abs(x) < 0.2",
                 "RE_GV_Expt": "abs(x) < 0.2",
                 "RE_BV_DFT": "abs(x) < 0.2",
                 "RE_GV_DFT": "abs(x) < 0.2",
-                "STD_Expt": "abs(x) < 0.2",
-                "STD_DFT": "abs(x) < 0.2",
+                "CV_Expt": "abs(x) < 0.2",
+                "CV_DFT": "abs(x) < 0.2",
             },
             "sort": ["idx"],
-            "metrics": METRICS_LIST,
+            "metrics": METRICS_LIST0,
         }
-        abc_confs_dict_list.append(conf_dict)
-    
-    abc_all_dict["report"]["content"] = abc_confs_dict_list
+        confs_elastic_dict_list.append(conf_dict)
 
-    return abc_all_dict
+    return confs_elastic_dict_list
 
-def eval_STD(orig_dict: dict):
+def eval_CV_elastic(content: list) -> dict:
     THRESHOLD = 0.2
-
-    content = orig_dict["report"]["content"]
 
     all_models = set()
     for w in content:
         all_models.update(w["content"].keys())
-    all_models.discard("Expt")
-    all_models.discard("DFT(abacus)")
+    all_models.remove("Expt")
+    all_models.remove("DFT(abacus)")
     all_models_list = list(all_models)
     all_models_list.sort()
 
-    all_confs_num = len(content)
+    all_confs_num = len(content) # number of total confs
 
-    content_dict1 = {}
+    content_dict = {}
     idx = 1
     for k in all_models_list:
-        new_dict1 = {k: 0 for k in METRICS_LIST1}
-        content_dict1[k] = new_dict1
+        new_dict = {k: 0 for k in METRICS_LIST1}
+        content_dict[k] = new_dict
 
         if k == 'single-dai':
-            content_dict1[k]["idx"] = 0
+            content_dict[k]["idx"] = 0
         elif k == 'mace':
-            content_dict1[k]["idx"] = 1
+            content_dict[k]["idx"] = 1
         else:
             idx += 1
-            content_dict1[k]["idx"] = idx
+            content_dict[k]["idx"] = idx
     
     for model_type in all_models_list:
-        STD_Expt_list = []
-        STD_DFT_list = []
+        CV_Expt_list = []
+        CV_DFT_list = []
         for item in content:
             icontent = item.get("content","")
             for k, v in icontent.items():
                 if k == model_type:
-                    if v["STD_Expt"] != None:
-                        STD_Expt_list.append(v["STD_Expt"])
+                    if v["CV_Expt"] != None:
+                        CV_Expt_list.append(v["CV_Expt"])
                     else:
-                        STD_Expt_list.append(v["STD_DFT"])
+                        CV_Expt_list.append(v["CV_DFT"])
                     
-                    STD_DFT_list.append(v["STD_DFT"])
+                    CV_DFT_list.append(v["CV_DFT"])
         
-        content_dict1[model_type]["STD_Expt/DFT_pass_num"] = str(sum(1 for x in STD_Expt_list if x < THRESHOLD)) + "/" + str(all_confs_num)
-        content_dict1[model_type]["STD_DFT_pass_num"] = str(sum(1 for x in STD_DFT_list if x < THRESHOLD)) + "/" + str(all_confs_num)
-        content_dict1[model_type]["Aver_STD_Expt/DFT"] = sum(STD_Expt_list) / len(STD_Expt_list)
-        content_dict1[model_type]["Aver_STD_DFT"] = sum(STD_DFT_list) / len(STD_DFT_list)
+        filtered_CV_Expt_list = [item for item in CV_Expt_list if item is not None]
+        filtered_CV_DFT_list = [item for item in CV_DFT_list if item is not None]
+        content_dict[model_type]["CV_Expt/DFT_pass_num"] = str(sum(1 for x in filtered_CV_Expt_list if x < THRESHOLD)) + "/" + str(all_confs_num)
+        content_dict[model_type]["CV_DFT_pass_num"] = str(sum(1 for x in filtered_CV_DFT_list if x < THRESHOLD)) + "/" + str(all_confs_num)
+        content_dict[model_type]["Aver_CV_Expt/DFT"] = sum(filtered_CV_Expt_list) / len(filtered_CV_Expt_list)
+        content_dict[model_type]["Aver_CV_DFT"] = sum(filtered_CV_DFT_list) / len(filtered_CV_DFT_list)
 
-    eval_STD_inf = {
+    eval_CV_elastic_inf = {
         "type": "metrics",
-        "title": "Evaluation of models by STD values of cij (STD < 0.2) (Note: substituting STD_DFT for STD_Expt, if STD_Expt is None)",
-        "content": content_dict1,
+        "title": "Evaluation of models by CV values of cij (CV < 0.2) (Note: substituting CV_DFT for CV_Expt, if CV_Expt is None)",
+        "content": content_dict,
         "sort": ["idx"],
         "metrics": METRICS_LIST1,
     }
 
-    return eval_STD_inf
+    return eval_CV_elastic_inf
 
-def prep_head():
-    head_inf_1 = {
-        "type": "head1",
-        "content": "1. Introduction",
+def prep_eos_content(orig_dict: dict, conf: str) -> dict:
+    content_dict = {}
+    idx = 2
+    for k, v in orig_dict.items():
+        new_dict = {k: None for k in METRICS_LIST2}
+
+        if k != 'Expt':
+            try:
+                eos_data = list(v[conf]["eos_00"]["result"].values())
+            except KeyError:
+                print(f"Eos information of {conf} is not in {k}")
+                content_dict[k] = new_dict
+                
+                if k == 'DFT(abacus)':
+                    new_dict["idx"] = 0
+                elif k == 'single-dai':
+                    new_dict["idx"] = 1
+                elif k == 'mace':
+                    new_dict["idx"] = 2
+                else:
+                    idx += 1
+                    new_dict["idx"] = idx
+                continue
+            else:
+                new_dict["eos1"] = eos_data[0]
+                new_dict["eos2"] = eos_data[1]
+                new_dict["eos3"] = eos_data[2]
+                new_dict["eos4"] = eos_data[3]
+                new_dict["eos5"] = eos_data[4]
+                new_dict["eos6"] = eos_data[5]
+                new_dict["eos7"] = eos_data[6]
+                new_dict["eos8"] = eos_data[7]
+                new_dict["eos9"] = eos_data[8]
+                new_dict["eos10"] = eos_data[9]
+                new_dict["eos11"] = eos_data[10]
+                new_dict["eos12"] = eos_data[11]
+                new_dict["eos13"] = eos_data[12]
+                new_dict["eos14"] = eos_data[13]
+                new_dict["eos15"] = eos_data[14]
+                new_dict["eos16"] = eos_data[15]
+
+            if k != 'DFT(abacus)':
+                predicted = np.array(eos_data)
+                try:
+                    actual = np.array(list(orig_dict["DFT(abacus)"][conf]["eos_00"]["result"].values()))
+                    cal_MAE_value = np.sum(abs(predicted - actual)) / np.size(actual)
+                except KeyError:
+                    cal_MAE_value = None
+                new_dict["MAE_DFT"] = cal_MAE_value
+
+            content_dict[k] = new_dict
+        
+            if k == 'DFT(abacus)':
+                new_dict["idx"] = 0
+            elif k == 'single-dai':
+                new_dict["idx"] = 1
+            elif k == 'mace':
+                new_dict["idx"] = 2
+            else:
+                idx += 1
+                new_dict["idx"] = idx
+
+    return content_dict
+
+def prep_eos_dict(orig_dict: dict) -> list:
+    all_confs = set()
+    all_props = set()
+
+    for w in orig_dict.values():
+        all_confs.update(w.keys())
+        for c in w.values():
+            all_props.update(c.keys())
+    all_confs_list = list(all_confs)
+    all_confs_list.sort()
+
+    confs_eos_dict_list = []
+    for conf in all_confs_list:
+        conf_dict = {
+            "type": "metrics",
+            "content": prep_eos_content(orig_dict, conf),
+            "title": conf,
+            "criteria": {
+                "MAE_DFT": "abs(x) < 0.1",
+            },
+            "sort": ["idx"],
+            "metrics": METRICS_LIST2,
+        }
+        confs_eos_dict_list.append(conf_dict)
+
+    return confs_eos_dict_list
+
+def eval_MAE_eos(content: list) -> dict:
+    THRESHOLD = 0.1
+
+    all_models = set()
+    for w in content:
+        all_models.update(w["content"].keys())
+    all_models.remove("DFT(abacus)")
+    all_models_list = list(all_models)
+    all_models_list.sort()
+
+    all_confs_num = len(content) # number of total confs
+
+    content_dict = {}
+    idx = 1
+    for k in all_models_list:
+        new_dict = {k: 0 for k in METRICS_LIST3}
+        content_dict[k] = new_dict
+
+        if k == 'single-dai':
+            content_dict[k]["idx"] = 0
+        elif k == 'mace':
+            content_dict[k]["idx"] = 1
+        else:
+            idx += 1
+            content_dict[k]["idx"] = idx
+    
+    for model_type in all_models_list:
+        MAE_DFT_list = []
+        for item in content:
+            icontent = item.get("content","")
+            for k, v in icontent.items():
+                if k == model_type:
+                    MAE_DFT_list.append(v["MAE_DFT"])
+        
+        filtered_MAE_DFT_list = [item for item in MAE_DFT_list if item is not None]
+        content_dict[model_type]["MAE_DFT_pass_num"] = str(sum(1 for x in filtered_MAE_DFT_list if x < THRESHOLD)) + "/" + str(all_confs_num)
+        content_dict[model_type]["Aver_MAE_DFT"] = sum(filtered_MAE_DFT_list) / len(filtered_MAE_DFT_list)
+
+    eval_AE_eos_inf = {
+        "type": "metrics",
+        "title": "Evaluation of models by MAE values of eos (MAE < 0.1)",
+        "content": content_dict,
+        "sort": ["idx"],
+        "metrics": METRICS_LIST3,
     }
-    head_inf_2 = {
+
+    return eval_AE_eos_inf
+
+def prep_head1(inf):
+    head_inf = {
         "type": "head1",
-        "content": "2. Results",
+        "content": inf,
     }
 
-    return head_inf_1, head_inf_2
+    return head_inf
 
-def prep_text():
-    abc_text = "Explanation of each parameter in Tables:\n" + \
-                "RE_BV_Expt -> The relative error of BV with experimental data\n" + \
-                "RE_BV_DFT -> The relative error of BV with DFT data\n" + \
-                "RE_GV_Expt -> The relative error of GV with experimental data\n" + \
-                "RE_GV_DFT -> The relative error of GV with DFT data\n" + \
-                "STD_Expt -> The standard deviation of the relative errors of cij with experimental data\n" + \
-                "STD_DFT -> The standard deviation of the relative errors of cij with DFT data\n" + \
+def prep_text_elastic():
+    abc_text = "Explanation of each parameter in Tables for elastic results:\n" + \
+                "RE_BV_Expt -> Relative error of BV with experimental data: Abs(BV - BV_Expt) / Abs(BV_Expt)\n" + \
+                "RE_BV_DFT -> Relative error of BV with DFT data: Abs(BV - BV_DFT) / Abs(BV_DFT)\n" + \
+                "RE_GV_Expt -> Relative error of GV with experimental data: Abs(GV - GV_Expt) / Abs(GV_Expt)\n" + \
+                "RE_GV_DFT -> Relative error of GV with DFT data: Abs(GV - GV_DFT) / Abs(GV_DFT)\n" + \
+                "CV_Expt -> Coefficient of Variation with respect to experimental data: Sqrt(Sum((cij - cij_Expt)^2) / Len(cij_Expt)) / Mean(cij_Expt)\n" + \
+                "CV_DFT -> Coefficient of Variation with respect to DFT data: Sqrt(Sum((cij - cij_DFT)^2) / Len(cij_DFT)) / Mean(cij_DFT)\n" + \
+                "Note: Values less(greater) than 0.2 are marked in green(red)\n" + \
+                "\n" + \
                 "BV = [C11 + C22 + C33 + 2(C12 + C13 + C23)] / 9\n" + \
-                "GV = [C11 + C22 + C33 + 3(C44 + C55 + C66) - (C12 + C13 + C23)] / 15"
+                "GV = [C11 + C22 + C33 + 3(C44 + C55 + C66) - (C12 + C13 + C23)] / 15\n"
 
+    text_inf = {
+        "type": "text",
+        "content": abc_text,
+    }
+
+    return text_inf
+
+def prep_text_eos():
+    abc_text = "Explanation of each parameter in Tables for eos results:\n" + \
+                "MAE -> Mean absolute error of eos with DFT data: Mean(Sum(Abs(eos - eos_DFT)))\n" + \
+                "Note: Values less(greater) than 0.1 are marked in green(red)\n"
     text_inf = {
         "type": "text",
         "content": abc_text,
@@ -1084,25 +1239,36 @@ def main():
 
     # simplify the work path key for all datasets
     simplified_dataset = tag_dataset(all_data_dict)
-    # prepare model predictions and evaluation parameters
-    abc_dict = prep_abc_dict(simplified_dataset)
-    # general evaluation of model prediction
-    eval_STD_inf = eval_STD(abc_dict)
-    abc_dict["report"]["content"].insert(0, eval_STD_inf)
-    # add heads
-    head_inf_1, head_inf_2 = prep_head()
-    text_inf = prep_text()
-    abc_dict["report"]["content"].insert(0, head_inf_2)
-    abc_dict["report"]["content"].insert(0, text_inf)
-    abc_dict["report"]["content"].insert(0, head_inf_1)
 
-    # with open('abc_dict.json', 'w') as json_file:
-    #     json.dump(abc_dict, json_file, indent = 4)
-    
-    Report(abc_dict)
+    elastic_dict_list = prep_elastic_dict(simplified_dataset)
+    eval_CV_elactic_inf = eval_CV_elastic(elastic_dict_list)
 
-METRICS_LIST1 = ["idx", "STD_Expt/DFT_pass_num", "STD_DFT_pass_num", "Aver_STD_Expt/DFT", "Aver_STD_DFT"]
-METRICS_LIST = ["idx", "c11", "c12", "c13", "c33", "c44", "c66", "BV", "GV", "RE_BV_Expt", "RE_BV_DFT", "RE_GV_Expt", "RE_GV_DFT", "STD_Expt", "STD_DFT"]
+    eos_dict_list = prep_eos_dict(simplified_dataset)
+    eval_MAE_eos_inf = eval_MAE_eos(eos_dict_list)
+
+    abc_all_dict ={
+        "report": {
+            "content_introduction_head": [prep_head1("1. Introduction")],
+            "content_summary_head": [prep_head1("2. Summary")],
+            "content_summary_elastic": [eval_CV_elactic_inf],
+            "content_summary_eos": [eval_MAE_eos_inf],
+            "content_result_head_1": [prep_head1("3. Elastic results")],
+            "content_text_elastic": [prep_text_elastic()],
+            "content_result_elastic": elastic_dict_list,
+            "content_result_head_2": [prep_head1("4. Eos results")],
+            "content_text_eos": [prep_text_eos()],
+            "content_result_eos": eos_dict_list
+        }
+    }
+
+    # dumpfn(abc_all_dict, "abc_all_dict.json", indent = 4)
+
+    Report(abc_all_dict)
+
+METRICS_LIST0 = ["idx", "c11", "c12", "c13", "c33", "c44", "c66", "BV", "GV", "RE_BV_Expt", "RE_BV_DFT", "RE_GV_Expt", "RE_GV_DFT", "CV_Expt", "CV_DFT"]
+METRICS_LIST1 = ["idx", "CV_Expt/DFT_pass_num", "CV_DFT_pass_num", "Aver_CV_Expt/DFT", "Aver_CV_DFT"]
+METRICS_LIST2 = ["idx", "eos1", "eos2", "eos3", "eos4", "eos5", "eos6", "eos7", "eos8", "eos9", "eos10", "eos11", "eos12", "eos13", "eos14", "eos15", "eos16", "MAE_DFT"]
+METRICS_LIST3 = ["idx", "MAE_DFT_pass_num", "Aver_MAE_DFT"]
     
 if __name__ == "__main__":
     main()
